@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
-import { app } from "@/lib/firebase/config";
+import { getFirebaseApp } from "@/lib/firebase/config";
 
 export default function Home() {
   const [email, setEmail] = useState("");
@@ -19,7 +19,7 @@ export default function Home() {
     setLoading(true);
     
     try {
-      const auth = getAuth(app);
+      const auth = getAuth(getFirebaseApp());
       if (isSignUp) {
         await createUserWithEmailAndPassword(auth, email, password);
         // Call the signup API route to set the session cookie
