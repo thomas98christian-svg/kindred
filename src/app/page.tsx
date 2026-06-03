@@ -20,14 +20,30 @@ export default function Home() {
     
     try {
       const auth = getFirebaseAuth();
+      let userCredential;
       if (isSignUp) {
-        await createUserWithEmailAndPassword(auth, email, password);
-        // Call the signup API route to set the session cookie
-        await fetch("/api/auth/on-signup", { method: "POST" });
+        userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      } else {
+        userCredential = await signInWithEmailAndPassword(auth, email, password);
+      }
+
+      const idToken = await userCredential.user.getIdToken();
+
+      // Call the API route to set the session cookie
+      const res = await fetch("/api/auth/on-signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idToken }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to establish session");
+      }
+
+      if (isSignUp) {
         router.push("/onboarding");
       } else {
-        await signInWithEmailAndPassword(auth, email, password);
-        await fetch("/api/auth/on-signup", { method: "POST" });
         router.push("/discover");
       }
     } catch (err: any) {
