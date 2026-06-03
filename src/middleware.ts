@@ -14,6 +14,7 @@ const PROTECTED_PATHS = [
   '/discover',
   '/matches',
   '/onboarding',
+  '/profile',
 ];
 
 // Routes that should redirect to discover if already authenticated

@@ -13,9 +13,10 @@ import {
   useEffect,
   useState,
   useMemo,
+  useCallback,
   type ReactNode,
 } from 'react';
-import { onAuthChange, signOut, type User } from '@/lib/firebase/auth';
+import { onAuthChange, signOut as firebaseSignOut, type User } from '@/lib/firebase/auth';
 
 interface AuthContextValue {
   user: User | null;
@@ -41,9 +42,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return unsubscribe;
   }, []);
 
+  const handleSignOut = useCallback(async () => {
+    // Clear the server-side session cookie first
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // Continue with client-side sign out even if cookie clear fails
+    }
+    // Sign out from Firebase client SDK
+    await firebaseSignOut();
+  }, []);
+
   const value = useMemo<AuthContextValue>(
-    () => ({ user, loading, signOut }),
-    [user, loading],
+    () => ({ user, loading, signOut: handleSignOut }),
+    [user, loading, handleSignOut],
   );
 
   return (
