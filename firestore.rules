@@ -1,0 +1,542 @@
+rules_version = '2';
+
+// ===============================================================
+// Kindred — Firestore Security Rules
+// ===============================================================
+//
+// IMPORTANT: These are prototype Security Rules designed to be
+// secure for the Kindred data model. They enforce ownership,
+// data validation, block enforcement, and feedback privacy.
+// However, you should review and verify them before broadly
+// sharing your app. The developer should work to harden these
+// rules before launch.
+//
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: communities
+//   Document ID: auto-generated
+//   Fields:
+//     - name: string (required, max 100 chars)
+//     - type: string (required, enum: metro|campus|hobby|org)
+//     - state: string (required, max 50)
+//     - metro: string (required, max 100)
+//     - joinRule: string (required, enum: open|approval|invite)
+//     - createdAt: timestamp (required, immutable)
+//
+// Collection: profiles
+//   Document ID: auth.uid
+//   Fields:
+//     - displayName: string (required, 1-50 chars)
+//     - age: int (required, 18-120)
+//     - gender: string (required, max 30)
+//     - genderPref: list of strings (required)
+//     - ageMinPref: int (required, 18-120)
+//     - ageMaxPref: int (required, 18-120)
+//     - segment: string (required, enum: student|professional|other)
+//     - intentModes: list of strings (required, values: friendship|dating)
+//     - seriousness: string (required, enum: casual|serious)
+//     - matchWithinSegment: bool (required)
+//     - state: string (required, max 50)
+//     - metro: string (required, max 100)
+//     - city: string (required, max 100)
+//     - lat: number (required)
+//     - lng: number (required)
+//     - bio: string (required, max 500)
+//     - photoUrl: string or null (optional, max 500)
+//     - verified: bool (required)
+//     - status: string (required, enum: active|paused|banned)
+//     - communityId: string or null (optional)
+//     - availability: map (required)
+//     - createdAt: timestamp (required, immutable)
+//
+// Subcollection: profiles/{uid}/profileAnswers
+//   Document ID: questionId string
+//   Fields:
+//     - questionId: string (required, max 50)
+//     - value: string | int | list (required)
+//
+// Collection: matches
+//   Document ID: auto-generated
+//   Fields:
+//     - profileA: string (required, uid)
+//     - profileB: string (required, uid)
+//     - participants: list of 2 strings (required, sorted uids)
+//     - compatScore: int (required, 0-100)
+//     - status: string (required, enum)
+//     - createdAt: timestamp (required, immutable)
+//
+// Collection: connections
+//   Document ID: auto-generated
+//   Fields:
+//     - matchId: string (required)
+//     - mode: string (required, enum: friendship|dating)
+//     - agreedSeriousness: string or null
+//     - profileA: string (required)
+//     - profileB: string (required)
+//     - participants: list of 2 strings (required)
+//     - openedAt: timestamp (required, immutable)
+//     - softDeadline: timestamp (required)
+//     - firstMessageAt: timestamp or null
+//     - state: string (required, enum: open|met|closed)
+//     - closedReason: string or null (max 200)
+//
+// Subcollection: connections/{connId}/messages
+//   Document ID: auto-generated
+//   Fields:
+//     - senderId: string (required, must equal auth.uid)
+//     - body: string (required, 1-5000 chars)
+//     - isBuddySuggested: bool (required)
+//     - createdAt: timestamp (required, immutable)
+//
+// Collection: buddySuggestions
+//   Document ID: auto-generated
+//   Fields: connectionId, suggestions (list), promptTokens, completionTokens, createdAt
+//   Access: read by connection participants, write by server only
+//
+// Collection: plans
+//   Document ID: auto-generated
+//   Fields: connectionId, participants (list of 2), activity, venueName,
+//           venuePlaceId, lat, lng, hubCity, proposedTime, status, createdAt
+//   Access: read/write by participants
+//
+// Collection: feedback
+//   Document ID: auto-generated
+//   CRITICAL: ONLY readable by fromProfile. NEVER by the other party.
+//   Fields:
+//     - connectionId: string (required)
+//     - fromProfile: string (required, must equal auth.uid)
+//     - wantAgain: bool (required)
+//     - privateNote: string or null (max 1000)
+//     - createdAt: timestamp (required, immutable)
+//
+// Collection: reports
+//   Document ID: auto-generated
+//   Fields: reporterId, reportedId, connectionId, reason, details, status, createdAt
+//   Access: read/create by reporter only
+//
+// Collection: blocks
+//   Document ID: "{blockerId}_{blockedId}" (deterministic)
+//   Fields: blockerId, blockedId, createdAt
+//   Access: read/create/delete by blocker only
+//
+// Collection: checkIns
+//   Document ID: auto-generated
+//   Fields: connectionId, profileId, planId, status, sharedContact, createdAt
+//   Access: read/write by profileId only
+//
+// Collection: reliability
+//   Document ID: auth.uid
+//   Fields: profileId, noShowCount, completedMeets
+//   Access: DENY ALL client operations. Server (Admin SDK) only.
+//
+// Collection: waitlist
+//   Document ID: auto-generated
+//   Fields: profileId, email, state, metro, communityId, position, referredBy, createdAt
+//   Access: read own entry only, create own only
+//
+// Collection: subscriptions
+//   Document ID: auto-generated
+//   Fields: profileId, stripeCustomerId, stripeSubId, tier, status, currentPeriodEnd
+//   Access: read own only, write by server only
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =============================================================
+    // Helper Functions
+    // =============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function validStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+
+    function isRecent(time) {
+      return time is timestamp &&
+        time > request.time - duration.value(5, 'm') &&
+        time <= request.time;
+    }
+
+    // Check if a block exists in either direction between two users
+    function isBlocked(userA, userB) {
+      return exists(/databases/$(database)/documents/blocks/$(userA + '_' + userB)) ||
+             exists(/databases/$(database)/documents/blocks/$(userB + '_' + userA));
+    }
+
+    // Check if the current user is a participant in a connection
+    function isConnectionParticipant(connId) {
+      let conn = get(/databases/$(database)/documents/connections/$(connId));
+      return conn != null && request.auth.uid in conn.data.participants;
+    }
+
+    // =============================================================
+    // Domain Validators
+    // =============================================================
+
+    function isValidProfile(data) {
+      let allowedFields = [
+        'displayName', 'age', 'gender', 'genderPref',
+        'ageMinPref', 'ageMaxPref', 'segment', 'intentModes',
+        'seriousness', 'matchWithinSegment', 'state', 'metro',
+        'city', 'lat', 'lng', 'bio', 'photoUrl', 'verified',
+        'status', 'communityId', 'availability', 'createdAt'
+      ];
+      return hasOnlyAllowedFields(allowedFields) &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 50 &&
+        data.age is int && data.age >= 18 && data.age <= 120 &&
+        data.gender is string && data.gender.size() <= 30 &&
+        data.genderPref is list && data.genderPref.size() <= 10 &&
+        data.ageMinPref is int && data.ageMinPref >= 18 && data.ageMinPref <= 120 &&
+        data.ageMaxPref is int && data.ageMaxPref >= 18 && data.ageMaxPref <= 120 &&
+        data.segment in ['student', 'professional', 'other'] &&
+        data.intentModes is list && data.intentModes.size() >= 1 && data.intentModes.size() <= 2 &&
+        data.seriousness in ['casual', 'serious'] &&
+        data.matchWithinSegment is bool &&
+        data.state is string && data.state.size() <= 50 &&
+        data.metro is string && data.metro.size() <= 100 &&
+        data.city is string && data.city.size() <= 100 &&
+        data.lat is number &&
+        data.lng is number &&
+        data.bio is string && data.bio.size() <= 500 &&
+        data.verified is bool &&
+        data.status in ['active', 'paused', 'banned'] &&
+        data.availability is map &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidProfileAnswer(data) {
+      let allowedFields = ['questionId', 'value'];
+      return hasOnlyAllowedFields(allowedFields) &&
+        data.questionId is string && data.questionId.size() >= 1 && data.questionId.size() <= 50;
+        // value can be string, int, or list — flexible by design
+    }
+
+    function isValidMessage(data) {
+      let allowedFields = ['senderId', 'body', 'isBuddySuggested', 'createdAt'];
+      return hasOnlyAllowedFields(allowedFields) &&
+        data.senderId == request.auth.uid &&
+        data.body is string && data.body.size() >= 1 && data.body.size() <= 5000 &&
+        data.isBuddySuggested is bool &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidFeedback(data) {
+      let allowedFields = ['connectionId', 'fromProfile', 'wantAgain', 'privateNote', 'createdAt'];
+      return hasOnlyAllowedFields(allowedFields) &&
+        data.connectionId is string && data.connectionId.size() >= 1 && data.connectionId.size() <= 100 &&
+        data.fromProfile == request.auth.uid &&
+        data.wantAgain is bool &&
+        data.createdAt is timestamp &&
+        (!('privateNote' in data) || data.privateNote == null ||
+          (data.privateNote is string && data.privateNote.size() <= 1000));
+    }
+
+    function isValidReport(data) {
+      let allowedFields = ['reporterId', 'reportedId', 'connectionId', 'reason', 'details', 'status', 'createdAt'];
+      return hasOnlyAllowedFields(allowedFields) &&
+        data.reporterId == request.auth.uid &&
+        data.reportedId is string && data.reportedId.size() <= 100 &&
+        data.reason in ['harassment', 'spam', 'fake_profile', 'underage', 'threatening', 'inappropriate_content', 'other'] &&
+        data.details is string && data.details.size() >= 1 && data.details.size() <= 2000 &&
+        data.status == 'open' &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidBlock(data) {
+      let allowedFields = ['blockerId', 'blockedId', 'createdAt'];
+      return hasOnlyAllowedFields(allowedFields) &&
+        data.blockerId == request.auth.uid &&
+        data.blockedId is string && data.blockedId.size() <= 100 &&
+        data.blockerId != data.blockedId &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidPlan(data) {
+      let allowedFields = ['connectionId', 'participants', 'activity', 'venueName',
+        'venuePlaceId', 'lat', 'lng', 'hubCity', 'proposedTime', 'status', 'createdAt'];
+      return hasOnlyAllowedFields(allowedFields) &&
+        data.connectionId is string &&
+        data.participants is list && data.participants.size() == 2 &&
+        data.activity is string && data.activity.size() >= 1 && data.activity.size() <= 200 &&
+        data.status in ['proposed', 'confirmed_a', 'confirmed_b', 'confirmed', 'done', 'cancelled'] &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidCheckIn(data) {
+      let allowedFields = ['connectionId', 'profileId', 'planId', 'status', 'sharedContact', 'createdAt'];
+      return hasOnlyAllowedFields(allowedFields) &&
+        data.profileId == request.auth.uid &&
+        data.connectionId is string &&
+        data.planId is string &&
+        data.status in ['planned', 'arrived', 'safe', 'help'] &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidWaitlist(data) {
+      let allowedFields = ['profileId', 'email', 'state', 'metro', 'communityId', 'position', 'referredBy', 'createdAt'];
+      return hasOnlyAllowedFields(allowedFields) &&
+        data.state is string && data.state.size() <= 50 &&
+        data.metro is string && data.metro.size() <= 100 &&
+        data.createdAt is timestamp;
+    }
+
+    // =============================================================
+    // Collection Rules
+    // =============================================================
+
+    // ----- communities -----
+    // Read: any authenticated user
+    // Write: admin/server only (Admin SDK bypasses rules)
+    match /communities/{communityId} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Server only via Admin SDK
+    }
+
+    // ----- profiles -----
+    // Read own: full access
+    // Read other: only if NOT blocked (match-level gating in Phase 1)
+    // Write: owner only with validation
+    match /profiles/{userId} {
+      allow read: if isOwner(userId) ||
+        (isAuthenticated() && !isBlocked(request.auth.uid, userId));
+
+      allow create: if isOwner(userId) &&
+        isValidProfile(request.resource.data) &&
+        request.resource.data.status == 'active' &&
+        request.resource.data.verified == false;
+
+      allow update: if isOwner(userId) &&
+        isValidProfile(request.resource.data) &&
+        areImmutableFieldsUnchanged(['createdAt']) &&
+        // Users cannot set their own status to 'banned' or verified to true
+        request.resource.data.status != 'banned' &&
+        request.resource.data.verified == resource.data.verified;
+
+      allow delete: if false; // Soft delete via status field
+
+      // ----- profiles/{uid}/profileAnswers -----
+      match /profileAnswers/{answerId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidProfileAnswer(request.resource.data);
+        allow update: if isOwner(userId) && isValidProfileAnswer(request.resource.data);
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    // ----- matches -----
+    // Read: participants only, and not blocked
+    // Write: server only (matching algorithm runs server-side)
+    match /matches/{matchId} {
+      allow read: if isAuthenticated() &&
+        request.auth.uid in resource.data.participants &&
+        !isBlocked(resource.data.profileA, resource.data.profileB);
+
+      allow write: if false; // Server only via Admin SDK
+    }
+
+    // ----- connections -----
+    // Read: participants only
+    // Create: server only
+    // Update: participants can update limited fields (state, firstMessageAt)
+    match /connections/{connId} {
+      allow read: if isAuthenticated() &&
+        request.auth.uid in resource.data.participants;
+
+      allow create: if false; // Server only via Admin SDK
+
+      allow update: if isAuthenticated() &&
+        request.auth.uid in resource.data.participants &&
+        areImmutableFieldsUnchanged([
+          'matchId', 'mode', 'profileA', 'profileB',
+          'participants', 'openedAt'
+        ]) &&
+        request.resource.data.state in ['open', 'met', 'closed'];
+
+      allow delete: if false;
+
+      // ----- connections/{connId}/messages -----
+      match /messages/{msgId} {
+        allow read: if isAuthenticated() &&
+          request.auth.uid in get(/databases/$(database)/documents/connections/$(connId)).data.participants;
+
+        allow create: if isAuthenticated() &&
+          request.auth.uid in get(/databases/$(database)/documents/connections/$(connId)).data.participants &&
+          isValidMessage(request.resource.data) &&
+          // Connection must be in 'open' or 'met' state to send messages
+          get(/databases/$(database)/documents/connections/$(connId)).data.state in ['open', 'met'];
+
+        // Messages are immutable after sending
+        allow update: if false;
+        allow delete: if false;
+      }
+    }
+
+    // ----- buddySuggestions -----
+    // Read: connection participants
+    // Write: server only
+    match /buddySuggestions/{suggId} {
+      allow read: if isAuthenticated() &&
+        isConnectionParticipant(resource.data.connectionId);
+      allow write: if false; // Server only via Admin SDK
+    }
+
+    // ----- plans -----
+    // Read: participants only
+    // Create: participants only
+    // Update: participants, status changes only
+    match /plans/{planId} {
+      allow read: if isAuthenticated() &&
+        request.auth.uid in resource.data.participants;
+
+      allow create: if isAuthenticated() &&
+        isValidPlan(request.resource.data) &&
+        request.auth.uid in request.resource.data.participants &&
+        request.resource.data.status == 'proposed';
+
+      allow update: if isAuthenticated() &&
+        request.auth.uid in resource.data.participants &&
+        isValidPlan(request.resource.data) &&
+        areImmutableFieldsUnchanged([
+          'connectionId', 'participants', 'createdAt'
+        ]);
+
+      allow delete: if false;
+    }
+
+    // ----- feedback -----
+    // CRITICAL: Only the author can read their own feedback.
+    // The other party in the connection can NEVER read it.
+    // This is the spec's #1 non-negotiable privacy requirement.
+    match /feedback/{feedbackId} {
+      // READ: Only the person who wrote the feedback
+      allow read: if isAuthenticated() &&
+        resource.data.fromProfile == request.auth.uid;
+
+      // CREATE: Only for yourself, with validation
+      allow create: if isAuthenticated() &&
+        isValidFeedback(request.resource.data);
+
+      // UPDATE: Only the author, with validation and immutable fields
+      allow update: if isAuthenticated() &&
+        resource.data.fromProfile == request.auth.uid &&
+        isValidFeedback(request.resource.data) &&
+        areImmutableFieldsUnchanged(['connectionId', 'fromProfile', 'createdAt']);
+
+      allow delete: if false;
+    }
+
+    // ----- reports -----
+    // Read: reporter only
+    // Create: reporter only, status must be 'open'
+    // Update/Delete: server only (moderation team)
+    match /reports/{reportId} {
+      allow read: if isAuthenticated() &&
+        resource.data.reporterId == request.auth.uid;
+
+      allow create: if isAuthenticated() &&
+        isValidReport(request.resource.data);
+
+      allow update: if false; // Server only (moderation)
+      allow delete: if false;
+    }
+
+    // ----- blocks -----
+    // Doc ID is "{blockerId}_{blockedId}" for deterministic exists() checks
+    // Read: blocker only
+    // Create: blocker only
+    // Delete: blocker only (unblock)
+    match /blocks/{blockId} {
+      allow read: if isAuthenticated() &&
+        resource.data.blockerId == request.auth.uid;
+
+      allow create: if isAuthenticated() &&
+        isValidBlock(request.resource.data) &&
+        // Enforce that doc ID matches the blocker_blocked pattern
+        blockId == (request.auth.uid + '_' + request.resource.data.blockedId);
+
+      allow update: if false; // Blocks are immutable
+      allow delete: if isAuthenticated() &&
+        resource.data.blockerId == request.auth.uid;
+    }
+
+    // ----- checkIns -----
+    // Read/Write: the profile owner only
+    match /checkIns/{checkInId} {
+      allow read: if isAuthenticated() &&
+        resource.data.profileId == request.auth.uid;
+
+      allow create: if isAuthenticated() &&
+        isValidCheckIn(request.resource.data);
+
+      allow update: if isAuthenticated() &&
+        resource.data.profileId == request.auth.uid &&
+        isValidCheckIn(request.resource.data) &&
+        areImmutableFieldsUnchanged(['connectionId', 'profileId', 'planId', 'createdAt']);
+
+      allow delete: if false;
+    }
+
+    // ----- reliability -----
+    // DENY ALL client operations. Only Admin SDK can read/write.
+    // Users never see their own or anyone's no-show counts.
+    match /reliability/{userId} {
+      allow read: if false;
+      allow write: if false;
+    }
+
+    // ----- waitlist -----
+    // Read: own entry only
+    // Create: own entry only
+    match /waitlist/{waitlistId} {
+      allow read: if isAuthenticated() &&
+        resource.data.profileId == request.auth.uid;
+
+      allow create: if isAuthenticated() &&
+        isValidWaitlist(request.resource.data) &&
+        (request.resource.data.profileId == request.auth.uid || request.resource.data.profileId == null);
+
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // ----- subscriptions -----
+    // Read: own subscription only
+    // Write: server only (Stripe webhooks via Admin SDK)
+    match /subscriptions/{subId} {
+      allow read: if isAuthenticated() &&
+        resource.data.profileId == request.auth.uid;
+
+      allow write: if false; // Server only via Admin SDK
+    }
+
+    // ----- Catch-all: deny everything else -----
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
