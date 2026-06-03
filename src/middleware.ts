@@ -11,15 +11,13 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 // Routes that require authentication
 const PROTECTED_PATHS = [
-  '/dashboard',
   '/discover',
-  '/connections',
-  '/profile',
-  '/settings',
+  '/matches',
+  '/onboarding',
 ];
 
-// Routes that should redirect to dashboard if already authenticated
-const AUTH_PATHS = ['/login', '/signup'];
+// Routes that should redirect to discover if already authenticated
+const AUTH_PATHS = ['/'];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -30,15 +28,15 @@ export function middleware(request: NextRequest) {
   // Protect authenticated routes
   const isProtectedPath = PROTECTED_PATHS.some((path) => pathname.startsWith(path));
   if (isProtectedPath && !session) {
-    const loginUrl = new URL('/login', request.url);
+    const loginUrl = new URL('/', request.url);
     loginUrl.searchParams.set('redirect', pathname);
     return NextResponse.redirect(loginUrl);
   }
 
   // Redirect authenticated users away from auth pages
-  const isAuthPath = AUTH_PATHS.some((path) => pathname.startsWith(path));
+  const isAuthPath = AUTH_PATHS.some((path) => pathname === path);
   if (isAuthPath && session) {
-    return NextResponse.redirect(new URL('/dashboard', request.url));
+    return NextResponse.redirect(new URL('/discover', request.url));
   }
 
   return NextResponse.next();
