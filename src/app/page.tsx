@@ -20,12 +20,9 @@ export default function Home() {
     
     try {
       const auth = getFirebaseAuth();
-      let userCredential;
-      if (isSignUp) {
-        userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      } else {
-        userCredential = await signInWithEmailAndPassword(auth, email, password);
-      }
+      const userCredential = isSignUp
+        ? await createUserWithEmailAndPassword(auth, email, password)
+        : await signInWithEmailAndPassword(auth, email, password);
 
       const idToken = await userCredential.user.getIdToken();
 

@@ -43,54 +43,52 @@ export async function POST(request: NextRequest) {
     const profileRef = adminDb.collection(Collections.PROFILES).doc(uid);
     const existing = await profileRef.get();
 
-    if (existing.exists) {
-      return NextResponse.json({ success: true, message: 'Profile already exists' });
+    if (!existing.exists) {
+      // Create profile and reliability docs atomically
+      const batch = adminDb.batch();
+
+      // Minimal profile — user will fill in details during onboarding
+      batch.set(profileRef, {
+        displayName: '',
+        age: 0,
+        gender: '',
+        genderPref: [],
+        ageMinPref: 18,
+        ageMaxPref: 99,
+        segment: 'other',
+        intentModes: [],
+        seriousness: 'casual',
+        matchWithinSegment: false,
+        state: '',
+        metro: '',
+        city: '',
+        lat: 0,
+        lng: 0,
+        bio: '',
+        photoUrl: null,
+        verified: false,
+        status: 'active',
+        communityId: null,
+        availability: {},
+        createdAt: FieldValue.serverTimestamp(),
+      });
+
+      // Reliability doc — server-only, tracks no-shows
+      const reliabilityRef = adminDb.collection(Collections.RELIABILITY).doc(uid);
+      batch.set(reliabilityRef, {
+        profileId: uid,
+        noShowCount: 0,
+        completedMeets: 0,
+      });
+
+      await batch.commit();
     }
-
-    // Create profile and reliability docs atomically
-    const batch = adminDb.batch();
-
-    // Minimal profile — user will fill in details during onboarding
-    batch.set(profileRef, {
-      displayName: '',
-      age: 0,
-      gender: '',
-      genderPref: [],
-      ageMinPref: 18,
-      ageMaxPref: 99,
-      segment: 'other',
-      intentModes: [],
-      seriousness: 'casual',
-      matchWithinSegment: false,
-      state: '',
-      metro: '',
-      city: '',
-      lat: 0,
-      lng: 0,
-      bio: '',
-      photoUrl: null,
-      verified: false,
-      status: 'active',
-      communityId: null,
-      availability: {},
-      createdAt: FieldValue.serverTimestamp(),
-    });
-
-    // Reliability doc — server-only, tracks no-shows
-    const reliabilityRef = adminDb.collection(Collections.RELIABILITY).doc(uid);
-    batch.set(reliabilityRef, {
-      profileId: uid,
-      noShowCount: 0,
-      completedMeets: 0,
-    });
-
-    await batch.commit();
 
     // Set a session cookie for middleware route protection
     const expiresIn = 60 * 60 * 24 * 14 * 1000; // 14 days
     const sessionCookie = await adminAuth.createSessionCookie(body.idToken, { expiresIn });
 
-    const response = NextResponse.json({ success: true });
+    const response = NextResponse.json({ success: true, message: existing.exists ? 'Profile already exists' : 'Profile created' });
     response.cookies.set('__session', sessionCookie, {
       maxAge: expiresIn / 1000,
       httpOnly: true,
