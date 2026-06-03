@@ -12,6 +12,7 @@
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
 import { getAuth, connectAuthEmulator, type Auth } from 'firebase/auth';
 import { getFirestore, connectFirestoreEmulator, type Firestore } from 'firebase/firestore';
+import { getStorage, type FirebaseStorage } from 'firebase/storage';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || '',
@@ -25,6 +26,7 @@ const firebaseConfig = {
 let _app: FirebaseApp | null = null;
 let _auth: Auth | null = null;
 let _db: Firestore | null = null;
+let _storage: FirebaseStorage | null = null;
 let _emulatorsConnected = false;
 
 function getFirebaseApp(): FirebaseApp {
@@ -77,4 +79,13 @@ export function getFirebaseDb(): Firestore {
   _db = getFirestore(getFirebaseApp());
   if (_auth) connectEmulators(_auth, _db);
   return _db;
+}
+
+/**
+ * Get the Firebase Storage instance.
+ */
+export function getFirebaseStorage(): FirebaseStorage {
+  if (_storage) return _storage;
+  _storage = getStorage(getFirebaseApp());
+  return _storage;
 }

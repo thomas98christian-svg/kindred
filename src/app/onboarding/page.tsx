@@ -8,6 +8,7 @@ import { getFirebaseDb, doc, setDoc } from "@/lib/firebase/firestore";
 import { QUESTIONS } from "@/lib/matching/questions";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronRight, ChevronLeft, Sparkles, Check, Heart, Users } from "lucide-react";
+import { PhotoUpload } from "@/components/ui/PhotoUpload";
 
 const US_STATES = [
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", 
@@ -67,14 +68,61 @@ export default function OnboardingPage() {
     genderPref: [] as string[],
     ageMinPref: "18",
     ageMaxPref: "99",
+    photoUrl: "",
+    lat: null as number | null,
+    lng: null as number | null,
   });
 
   const [answers, setAnswers] = useState<Record<string, any>>({});
+  const [cityPredictions, setCityPredictions] = useState<any[]>([]);
+  const [showPredictions, setShowPredictions] = useState(false);
+
+  const handleCityChange = async (val: string) => {
+    setFormData((prev) => ({ ...prev, city: val }));
+    if (val.length < 2) {
+      setCityPredictions([]);
+      setShowPredictions(false);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/places/autocomplete?input=${encodeURIComponent(val)}&types=(cities)`);
+      const data = await res.json();
+      setCityPredictions(data.predictions || []);
+      setShowPredictions(true);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSelectCity = async (prediction: any) => {
+    try {
+      setShowPredictions(false);
+      const res = await fetch(`/api/places/details?place_id=${prediction.place_id}`);
+      const data = await res.json();
+      const coords = data.result?.geometry?.location;
+
+      const parts = prediction.description.split(",");
+      const city = parts[0]?.trim() || "";
+      const state = parts[1]?.trim() || "";
+      const matchedState = US_STATES.find(s => state.includes(s)) || "";
+
+      setFormData((prev) => ({
+        ...prev,
+        city,
+        state: matchedState,
+        lat: coords ? coords.lat : null,
+        lng: coords ? coords.lng : null
+      }));
+      setCityPredictions([]);
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const handleNext = () => setStepAndDirection([step + 1, 1]);
   const handleBack = () => setStepAndDirection([step - 1, -1]);
 
-  const totalSteps = QUESTIONS.length + 3; // community, about, intent, questions...
+  const totalSteps = QUESTIONS.length + 4; // community, about, photo, intent, questions...
 
   const handleSubmit = async () => {
     if (!user) return;
@@ -97,6 +145,9 @@ export default function OnboardingPage() {
         metro: formData.metro,
         city: formData.city,
         bio: formData.bio,
+        photoUrl: formData.photoUrl || null,
+        lat: formData.lat || null,
+        lng: formData.lng || null,
         status: "active", // Activate the profile
       }, { merge: true });
 
@@ -256,7 +307,7 @@ export default function OnboardingPage() {
                     </div>
 
                     <div className="grid grid-cols-3 gap-3">
-                      <div className="col-span-2">
+                      <div className="col-span-2 relative">
                         <label className="block text-[11px] font-bold uppercase tracking-wider text-surface-400 mb-1.5">
                           City
                         </label>
@@ -265,8 +316,24 @@ export default function OnboardingPage() {
                           placeholder="Seattle"
                           className="w-full p-3 rounded-xl bg-surface-900 border border-white/10 text-sm focus:border-brand-500 focus:outline-none transition-colors"
                           value={formData.city}
-                          onChange={e => setFormData({...formData, city: e.target.value})}
+                          onChange={e => handleCityChange(e.target.value)}
+                          onFocus={() => { if (cityPredictions.length > 0) setShowPredictions(true); }}
+                          onBlur={() => setTimeout(() => setShowPredictions(false), 200)}
                         />
+                        {showPredictions && cityPredictions.length > 0 && (
+                          <div className="absolute left-0 right-0 mt-1 bg-surface-900 border border-white/10 rounded-xl overflow-hidden shadow-2xl z-50 max-h-48 overflow-y-auto">
+                            {cityPredictions.map((pred, i) => (
+                              <button
+                                key={i}
+                                type="button"
+                                onClick={() => handleSelectCity(pred)}
+                                className="w-full p-2.5 text-left text-xs font-semibold text-surface-300 hover:bg-brand-500/10 hover:text-brand-400 border-b border-white/5 transition-colors"
+                              >
+                                {pred.description}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <div>
                         <label className="block text-[11px] font-bold uppercase tracking-wider text-surface-400 mb-1.5">
@@ -330,8 +397,39 @@ export default function OnboardingPage() {
                 </div>
               )}
 
-              {/* Step 2: Intent Modes */}
+              {/* Step 2: Upload Profile Photo */}
               {step === 2 && (
+                <div className="space-y-6">
+                  <div className="space-y-1">
+                    <h2 className="text-2xl font-extrabold tracking-tight text-white">Upload Profile Photo</h2>
+                    <p className="text-xs text-surface-400">Add a clear photo of yourself so potential connections can get to know you.</p>
+                  </div>
+                  
+                  <div className="py-4">
+                    <PhotoUpload
+                      currentPhotoUrl={formData.photoUrl || null}
+                      onUploadComplete={(url) => setFormData({ ...formData, photoUrl: url })}
+                      onRemove={() => setFormData({ ...formData, photoUrl: "" })}
+                    />
+                  </div>
+
+                  <div className="flex gap-4 pt-2">
+                    <button onClick={handleBack} className="flex-1 py-3 border border-white/10 hover:bg-surface-900 rounded-xl font-semibold text-xs transition-colors flex items-center justify-center gap-1.5">
+                      <ChevronLeft size={16} /> Back
+                    </button>
+                    <button 
+                      onClick={handleNext} 
+                      disabled={!formData.photoUrl} 
+                      className="flex-1 py-3 bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white rounded-xl font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-lg shadow-brand-600/35"
+                    >
+                      Continue <ChevronRight size={16} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 3: Intent Modes */}
+              {step === 3 && (
                 <div className="space-y-6">
                   <div className="space-y-1">
                     <h2 className="text-2xl font-extrabold tracking-tight text-white">Your Intent</h2>
@@ -354,7 +452,7 @@ export default function OnboardingPage() {
                             setFormData({...formData, intentModes: next});
                           }}
                           className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl border text-xs font-semibold transition-colors ${
-                            formData.intentModes.includes("friendship")
+                             formData.intentModes.includes("friendship")
                               ? "bg-brand-500/10 border-brand-500/30 text-brand-400"
                               : "border-white/10 hover:bg-surface-900 text-surface-400"
                           }`}
@@ -443,11 +541,11 @@ export default function OnboardingPage() {
                 </div>
               )}
 
-              {/* Steps 3+ : 8 matching questions */}
-              {step > 2 && step <= QUESTIONS.length + 2 && (() => {
-                const qIndex = step - 3;
+              {/* Steps 4+ : 8 matching questions */}
+              {step > 3 && step <= QUESTIONS.length + 3 && (() => {
+                const qIndex = step - 4;
                 const question = QUESTIONS[qIndex];
-                const isLast = step === QUESTIONS.length + 2;
+                const isLast = step === QUESTIONS.length + 3;
 
                 return (
                   <div className="space-y-6">

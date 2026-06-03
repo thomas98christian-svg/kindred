@@ -24,7 +24,9 @@ import {
   CheckCircle, 
   ChevronDown,
   Clock,
-  Sparkles
+  Sparkles,
+  User,
+  X
 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -39,12 +41,111 @@ export default function ChatPage() {
 
   const [connection, setConnection] = useState<ConnectionDoc | null>(null);
   const [otherProfile, setOtherProfile] = useState<(ProfileDoc & { id: string }) | null>(null);
+  const [myProfile, setMyProfile] = useState<ProfileDoc | null>(null);
   const [messages, setMessages] = useState<(MessageDoc & { id: string })[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [isSubmittingSafety, setIsSubmittingSafety] = useState(false);
   const [reportReason, setReportReason] = useState("");
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+
+  // Propose Plan States
+  const [midpointVenues, setMidpointVenues] = useState<any[]>([]);
+  const [loadingVenues, setLoadingVenues] = useState(false);
+  const [selectedVenue, setSelectedVenue] = useState<any | null>(null);
+  const [customSearch, setCustomSearch] = useState("");
+  const [venuePredictions, setVenuePredictions] = useState<any[]>([]);
+  const [showPredictions, setShowPredictions] = useState(false);
+  const [proposedTime, setProposedTime] = useState("");
+  const [activityText, setActivityText] = useState("Coffee date");
+
+  // AI Buddy States
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [showAiBuddy, setShowAiBuddy] = useState(false);
+
+  const fetchSuggestions = async () => {
+    if (!connectionId) return;
+    setLoadingSuggestions(true);
+    try {
+      const res = await fetch(`/api/buddy/suggest?connectionId=${connectionId}`);
+      const data = await res.json();
+      if (data.suggestions) {
+        setSuggestions(data.suggestions);
+      }
+    } catch (err) {
+      console.error("Failed to fetch AI suggestions:", err);
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  };
+
+  const toggleAiBuddy = () => {
+    setShowAiBuddy(prev => {
+      const next = !prev;
+      if (next && suggestions.length === 0) {
+        fetchSuggestions();
+      }
+      return next;
+    });
+  };
+
+  const openPlanModal = async () => {
+    planDialogRef.current?.showModal();
+    if (midpointVenues.length > 0) return;
+    setLoadingVenues(true);
+    try {
+      const lat1 = myProfile?.lat || 47.6062;
+      const lng1 = myProfile?.lng || -122.3321;
+      const lat2 = otherProfile?.lat || 47.6101;
+      const lng2 = otherProfile?.lng || -122.3421;
+      const res = await fetch(`/api/places/midpoint?lat1=${lat1}&lng1=${lng1}&lat2=${lat2}&lng2=${lng2}`);
+      const data = await res.json();
+      setMidpointVenues(data.results || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingVenues(false);
+    }
+  };
+
+  const handleVenueSearchChange = async (val: string) => {
+    setCustomSearch(val);
+    if (val.length < 2) {
+      setVenuePredictions([]);
+      setShowPredictions(false);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/places/autocomplete?input=${encodeURIComponent(val)}`);
+      const data = await res.json();
+      setVenuePredictions(data.predictions || []);
+      setShowPredictions(true);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSelectCustomVenue = async (prediction: any) => {
+    try {
+      setShowPredictions(false);
+      const res = await fetch(`/api/places/details?place_id=${prediction.place_id}`);
+      const data = await res.json();
+      const coords = data.result?.geometry?.location;
+      setSelectedVenue({
+        name: prediction.description.split(",")[0],
+        address: prediction.description,
+        placeId: prediction.place_id,
+        lat: coords ? coords.lat : null,
+        lng: coords ? coords.lng : null,
+        rating: 4.5,
+      });
+      setCustomSearch("");
+      setVenuePredictions([]);
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   // Dialog Refs
   const planDialogRef = useRef<HTMLDialogElement>(null);
@@ -74,6 +175,10 @@ export default function ChatPage() {
         const profile = await readDoc<ProfileDoc>("profiles", otherId);
         if (profile) {
           setOtherProfile({ ...profile, id: otherId });
+        }
+        const myProfileData = await readDoc<ProfileDoc>("profiles", user!.uid);
+        if (myProfileData) {
+          setMyProfile(myProfileData);
         }
 
         // Listen to messages
@@ -106,6 +211,12 @@ export default function ChatPage() {
     };
   }, [user, connectionId, router, error, info]);
 
+  useEffect(() => {
+    if (connectionId) {
+      fetchSuggestions();
+    }
+  }, [connectionId]);
+
   // Monitor scroll to show jump-to-bottom button
   const handleScroll = () => {
     if (!chatContainerRef.current) return;
@@ -126,6 +237,8 @@ export default function ChatPage() {
     const txt = newMessage.trim();
     setNewMessage(""); // optimistic clear
 
+    const isSuggested = suggestions.includes(txt);
+
     try {
       const db = getFirebaseDb();
       const msgRef = doc(collection(db, `connections/${connectionId}/messages`));
@@ -133,11 +246,14 @@ export default function ChatPage() {
       await setDoc(msgRef, {
         senderId: user.uid,
         body: txt,
-        isBuddySuggested: false,
+        isBuddySuggested: isSuggested,
         createdAt: serverTimestamp(),
       });
       
       scrollToBottom();
+      
+      // Post-send auto-refresh suggestions to adapt to the new message context
+      fetchSuggestions();
     } catch (err) {
       console.error(err);
       error("Failed to send message.");
@@ -146,20 +262,27 @@ export default function ChatPage() {
   };
 
   const handleProposePlan = async () => {
-    if (!user || !otherProfile) return;
+    if (!user || !otherProfile || !selectedVenue || !proposedTime) {
+      error("Please select a venue and meeting time.");
+      return;
+    }
     try {
       const db = getFirebaseDb();
       const planRef = doc(collection(db, "plans"));
       const participants = [user.uid, otherProfile.id].sort() as [string, string];
       
+      const timeDate = new Date(proposedTime);
+
       await setDoc(planRef, {
         connectionId,
         participants,
-        activity: "Coffee at local cafe",
-        venueName: "Kindred Social Spot",
-        venuePlaceId: null,
-        lat: null, lng: null, hubCity: null,
-        proposedTime: serverTimestamp(),
+        activity: activityText,
+        venueName: selectedVenue.name,
+        venuePlaceId: selectedVenue.placeId,
+        lat: selectedVenue.lat || null,
+        lng: selectedVenue.lng || null,
+        hubCity: otherProfile.city || null,
+        proposedTime: timeDate,
         status: "proposed",
         createdAt: serverTimestamp()
       });
@@ -168,13 +291,15 @@ export default function ChatPage() {
       const msgRef = doc(collection(db, `connections/${connectionId}/messages`));
       await setDoc(msgRef, {
         senderId: user.uid,
-        body: "📍 I proposed a plan: Coffee at Kindred Social Spot!",
+        body: `📍 I proposed a plan: ${activityText} at ${selectedVenue.name} on ${timeDate.toLocaleDateString()} at ${timeDate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}!`,
         isBuddySuggested: false,
         createdAt: serverTimestamp(),
       });
       
       success("Meetup plan proposed!");
       planDialogRef.current?.close();
+      setSelectedVenue(null);
+      setProposedTime("");
     } catch (err) {
       console.error(err);
       error("Failed to propose plan.");
@@ -265,6 +390,13 @@ export default function ChatPage() {
           <Link href="/matches" className="p-2 -ml-2 rounded-full hover:bg-surface-800 transition-colors">
             <ArrowLeft size={18} className="text-surface-300" />
           </Link>
+          <div className="w-9 h-9 rounded-full bg-slate-900 border border-white/10 flex items-center justify-center shrink-0 overflow-hidden">
+            {otherProfile.photoUrl ? (
+              <img src={otherProfile.photoUrl} alt={otherProfile.displayName} className="w-full h-full object-cover" />
+            ) : (
+              <User size={16} className="text-white/40" />
+            )}
+          </div>
           <div>
             <h1 className="font-extrabold text-sm tracking-tight text-white">{otherProfile.displayName}</h1>
             <p className="text-[10px] font-semibold text-surface-400 capitalize">{connection?.mode}</p>
@@ -273,7 +405,18 @@ export default function ChatPage() {
         
         <div className="flex gap-1.5">
           <button 
-            onClick={() => planDialogRef.current?.showModal()}
+            onClick={toggleAiBuddy}
+            className={`p-2 rounded-full border transition-all duration-300 ${
+              showAiBuddy 
+                ? 'bg-amber-500/20 border-amber-500/40 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.2)] animate-pulse' 
+                : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/10'
+            }`}
+            title="AI Buddy Suggestions"
+          >
+            <Sparkles size={16} />
+          </button>
+          <button 
+            onClick={openPlanModal}
             className="p-2 rounded-full bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 transition-colors border border-brand-500/10"
             title="Propose Plan"
           >
@@ -344,6 +487,69 @@ export default function ChatPage() {
         )}
       </AnimatePresence>
 
+      {/* AI Buddy Panel */}
+      <AnimatePresence>
+        {showAiBuddy && (
+          <motion.div
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 15 }}
+            className="px-3 py-2 border-t border-white/5 bg-surface-950/40 backdrop-blur-xl z-10 space-y-2"
+          >
+            <div className="flex items-center justify-between px-1">
+              <div className="flex items-center gap-1.5 text-amber-400">
+                <Sparkles size={14} className="animate-pulse" />
+                <span className="text-[10px] font-bold uppercase tracking-wider">AI Conversation Buddy</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={fetchSuggestions}
+                  disabled={loadingSuggestions}
+                  className="text-[9px] font-bold text-surface-400 hover:text-white transition-colors"
+                >
+                  {loadingSuggestions ? "Generating..." : "Refresh"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAiBuddy(false)}
+                  className="text-surface-500 hover:text-surface-300"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            </div>
+
+            {loadingSuggestions ? (
+              <div className="flex items-center justify-center py-4 gap-2">
+                <div className="w-2 h-2 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+                <div className="w-2 h-2 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+                <div className="w-2 h-2 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+              </div>
+            ) : suggestions.length === 0 ? (
+              <div className="text-center py-3 text-[11px] text-surface-500 italic">
+                No suggestions. Try refreshing.
+              </div>
+            ) : (
+              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none snap-x snap-mandatory">
+                {suggestions.map((suggestion, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    onClick={() => {
+                      setNewMessage(suggestion);
+                    }}
+                    className="flex-shrink-0 w-[85%] snap-center p-3 text-left bg-gradient-to-br from-amber-500/5 to-orange-500/5 hover:from-amber-500/10 hover:to-orange-500/10 border border-amber-500/10 hover:border-amber-500/30 rounded-xl text-xs text-surface-200 transition-all font-medium active:scale-[0.98] shadow-sm select-none"
+                  >
+                    "{suggestion}"
+                  </button>
+                ))}
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Message Input Box */}
       <form onSubmit={handleSend} className="p-3 border-t border-white/5 bg-background flex items-end gap-2 z-20">
         <input
@@ -365,27 +571,139 @@ export default function ChatPage() {
       {/* --- Plan Dialog (Native) --- */}
       <dialog 
         ref={planDialogRef}
-        className="w-full max-w-sm rounded-3xl p-6 bg-surface-900 border border-white/10 text-foreground backdrop:bg-black/70 backdrop:backdrop-blur-sm focus:outline-none animate-in fade-in zoom-in duration-200"
+        className="w-full max-w-sm rounded-3xl p-6 bg-surface-900 border border-white/10 text-foreground backdrop:bg-black/70 backdrop:backdrop-blur-sm focus:outline-none animate-in fade-in zoom-in duration-200 shadow-2xl"
       >
         <div className="space-y-4">
-          <h2 className="text-xl font-bold tracking-tight text-white">Propose a Meetup</h2>
-          <p className="text-surface-400 text-xs leading-relaxed">
-            Suggest a simple coffee date at a shared spot to move your connection to the physical world.
-          </p>
+          <div className="flex justify-between items-center border-b border-white/5 pb-2">
+            <h2 className="text-xl font-bold tracking-tight text-white">Propose a Plan</h2>
+            <button onClick={() => { planDialogRef.current?.close(); setSelectedVenue(null); setProposedTime(""); }} className="text-surface-400 hover:text-white transition-colors">
+              <X size={16} />
+            </button>
+          </div>
           
-          <div className="space-y-2.5 pt-2">
-            <button 
-              onClick={handleProposePlan} 
-              className="w-full py-3 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-semibold text-xs transition-colors shadow-lg shadow-brand-500/25"
-            >
-              Propose Coffee Date
-            </button>
-            <button 
-              onClick={() => planDialogRef.current?.close()} 
-              className="w-full py-3 bg-surface-850 hover:bg-surface-800 rounded-xl font-semibold text-xs transition-colors border border-white/5"
-            >
-              Cancel
-            </button>
+          <div className="space-y-3 pt-1">
+            {/* Activity Input */}
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-surface-400 mb-1">
+                Activity
+              </label>
+              <input 
+                type="text"
+                value={activityText}
+                onChange={e => setActivityText(e.target.value)}
+                className="w-full p-2.5 bg-surface-950 border border-white/5 rounded-xl text-xs focus:border-brand-500 focus:outline-none text-white transition-colors"
+                placeholder="e.g. Coffee Date, Drinks, Park Walk"
+              />
+            </div>
+
+            {/* Selected Venue Display */}
+            {selectedVenue ? (
+              <div className="p-3 bg-brand-500/10 border border-brand-500/20 rounded-xl flex items-center justify-between">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-bold text-brand-400">{selectedVenue.name}</p>
+                  <p className="text-[10px] text-surface-400 truncate pr-2">{selectedVenue.address}</p>
+                </div>
+                <button 
+                  onClick={() => setSelectedVenue(null)} 
+                  className="p-1 hover:bg-surface-800 rounded-full text-surface-400 hover:text-white shrink-0"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-surface-400">
+                  Select Venue
+                </label>
+                
+                {/* Search Bar */}
+                <div className="relative">
+                  <input 
+                    type="text"
+                    value={customSearch}
+                    onChange={e => handleVenueSearchChange(e.target.value)}
+                    placeholder="Search custom cafe/restaurant..."
+                    className="w-full p-2.5 bg-surface-950 border border-white/5 rounded-xl text-xs focus:border-brand-500 focus:outline-none text-white transition-colors"
+                  />
+                  {showPredictions && venuePredictions.length > 0 && (
+                    <div className="absolute left-0 right-0 mt-1 bg-surface-950 border border-white/10 rounded-xl overflow-hidden shadow-2xl z-50 max-h-36 overflow-y-auto">
+                      {venuePredictions.map((pred, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => handleSelectCustomVenue(pred)}
+                          className="w-full p-2.5 text-left text-[11px] text-surface-300 hover:bg-brand-500/10 hover:text-brand-400 border-b border-white/5 transition-colors"
+                        >
+                          {pred.description}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Recommended Midpoint Venues */}
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-surface-500">
+                    Recommended Midpoint Cafe Spots
+                  </p>
+                  {loadingVenues ? (
+                    <div className="flex items-center justify-center py-4">
+                      <div className="w-5 h-5 rounded-full border-2 border-brand-500/30 border-t-brand-500 animate-spin" />
+                    </div>
+                  ) : midpointVenues.length === 0 ? (
+                    <p className="text-[10px] text-surface-500 italic">No recommendations found. Try searching above.</p>
+                  ) : (
+                    <div className="grid gap-1.5 max-h-36 overflow-y-auto pr-1">
+                      {midpointVenues.map((venue, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => setSelectedVenue(venue)}
+                          className="w-full p-2 bg-surface-950 hover:bg-brand-500/5 hover:border-brand-500/30 border border-white/5 rounded-lg text-left transition-colors flex justify-between items-center group"
+                        >
+                          <div className="min-w-0 flex-1 pr-2">
+                            <p className="text-[11px] font-bold text-surface-200 group-hover:text-brand-400 truncate">{venue.name}</p>
+                            <p className="text-[9px] text-surface-500 truncate">{venue.address}</p>
+                          </div>
+                          <span className="text-[10px] text-amber-400 font-bold shrink-0 bg-amber-400/10 border border-amber-400/20 px-1 rounded">
+                            ★ {venue.rating}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Time input */}
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-surface-400 mb-1">
+                Meeting Date & Time
+              </label>
+              <input 
+                type="datetime-local"
+                value={proposedTime}
+                onChange={e => setProposedTime(e.target.value)}
+                className="w-full p-2.5 bg-surface-950 border border-white/5 rounded-xl text-xs focus:border-brand-500 focus:outline-none text-white"
+              />
+            </div>
+
+            <div className="flex gap-2 pt-3">
+              <button 
+                onClick={handleProposePlan}
+                disabled={!selectedVenue || !proposedTime}
+                className="flex-1 py-3 bg-brand-600 hover:bg-brand-500 disabled:opacity-30 disabled:hover:bg-brand-600 text-white rounded-xl font-semibold text-xs transition-colors shadow-lg shadow-brand-500/20"
+              >
+                Send Proposal
+              </button>
+              <button 
+                onClick={() => { planDialogRef.current?.close(); setSelectedVenue(null); setProposedTime(""); }} 
+                className="py-3 px-4 bg-surface-850 hover:bg-surface-800 rounded-xl font-semibold text-xs transition-colors border border-white/5 text-surface-300"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       </dialog>

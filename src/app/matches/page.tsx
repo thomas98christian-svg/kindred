@@ -179,8 +179,12 @@ export default function MatchesPage() {
                     <div className="absolute top-0 inset-x-0 h-[1px] bg-gradient-to-r from-transparent via-brand-500/0 group-hover:via-brand-500/20 to-transparent transition-all duration-300" />
                     
                     {/* Profile avatar representation */}
-                    <div className="w-14 h-14 rounded-full bg-gradient-to-br from-brand-900/30 to-indigo-900/40 border border-white/10 flex items-center justify-center shrink-0 shadow-md">
-                      <User size={24} className="text-white/40" />
+                    <div className="w-14 h-14 rounded-full bg-slate-900 border border-white/10 flex items-center justify-center shrink-0 shadow-md overflow-hidden">
+                      {c.otherProfile.photoUrl ? (
+                        <img src={c.otherProfile.photoUrl} alt={c.otherProfile.displayName} className="w-full h-full object-cover" />
+                      ) : (
+                        <User size={24} className="text-white/40" />
+                      )}
                     </div>
 
                     {/* Chat Text Details */}

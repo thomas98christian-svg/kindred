@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { useToast } from "@/components/providers/ToastProvider";
 import { getFirebaseDb, doc, readDoc, setDoc } from "@/lib/firebase/firestore";
 import { ProfileDoc } from "@/types/database";
 import { ConnectionMode } from "@/types/enums";
 import { motion, AnimatePresence } from "framer-motion";
+import { PhotoUpload } from "@/components/ui/PhotoUpload";
 import { 
   User, 
   LogOut, 
@@ -70,7 +72,55 @@ export default function ProfilePage() {
     city: "",
     state: "",
     metro: "",
+    photoUrl: "",
+    lat: null as number | null,
+    lng: null as number | null,
   });
+
+  const [cityPredictions, setCityPredictions] = useState<any[]>([]);
+  const [showPredictions, setShowPredictions] = useState(false);
+
+  const handleCityChange = async (val: string) => {
+    setEditForm((prev) => ({ ...prev, city: val }));
+    if (val.length < 2) {
+      setCityPredictions([]);
+      setShowPredictions(false);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/places/autocomplete?input=${encodeURIComponent(val)}&types=(cities)`);
+      const data = await res.json();
+      setCityPredictions(data.predictions || []);
+      setShowPredictions(true);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSelectCity = async (prediction: any) => {
+    try {
+      setShowPredictions(false);
+      const res = await fetch(`/api/places/details?place_id=${prediction.place_id}`);
+      const data = await res.json();
+      const coords = data.result?.geometry?.location;
+
+      const parts = prediction.description.split(",");
+      const city = parts[0]?.trim() || "";
+      const state = parts[1]?.trim() || "";
+      const matchedState = US_STATES.find(s => state.includes(s)) || "";
+
+      setEditForm((prev) => ({
+        ...prev,
+        city,
+        state: matchedState,
+        lat: coords ? coords.lat : null,
+        lng: coords ? coords.lng : null
+      }));
+      setCityPredictions([]);
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   useEffect(() => {
     if (!user) return;
@@ -97,6 +147,9 @@ export default function ProfilePage() {
           city: docData.city || "",
           state: docData.state || "",
           metro: docData.metro || "",
+          photoUrl: docData.photoUrl || "",
+          lat: docData.lat || null,
+          lng: docData.lng || null,
         });
       } catch (err) {
         console.error("Failed to load profile:", err);
@@ -108,6 +161,52 @@ export default function ProfilePage() {
 
     loadProfile();
   }, [user, router, error, info]);
+
+  // Handle Stripe Redirection Query Parameters
+  useEffect(() => {
+    if (!user) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const subscriptionParam = params.get("subscription");
+    const portalParam = params.get("portal");
+
+    async function handleParams() {
+      if (subscriptionParam === "success") {
+        try {
+          const db = getFirebaseDb();
+          await setDoc(doc(db, "profiles", user!.uid), {
+            subscriptionTier: "plus",
+          }, { merge: true });
+
+          await setDoc(doc(db, "subscriptions", user!.uid), {
+            profileId: user!.uid,
+            stripeCustomerId: "cus_mock_customer",
+            stripeSubId: "sub_mock_subscription",
+            tier: "plus",
+            status: "active",
+            currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          }, { merge: true });
+
+          success("Welcome to Kindred Plus! Your membership is active.");
+          setProfile(prev => prev ? ({ ...prev, subscriptionTier: "plus" } as any) : null);
+        } catch (err) {
+          console.error(err);
+          error("Failed to activate premium membership.");
+        }
+        router.replace("/profile");
+      } else if (subscriptionParam === "cancel") {
+        info("Checkout cancelled.");
+        router.replace("/profile");
+      }
+
+      if (portalParam === "success") {
+        success("Billing details updated.");
+        router.replace("/profile");
+      }
+    }
+
+    handleParams();
+  }, [user, router, success, error, info]);
 
   const handleSignOut = async () => {
     try {
@@ -180,6 +279,9 @@ export default function ProfilePage() {
         city: editForm.city,
         state: editForm.state,
         metro: editForm.metro,
+        photoUrl: editForm.photoUrl || null,
+        lat: editForm.lat || null,
+        lng: editForm.lng || null,
       };
 
       await setDoc(doc(db, "profiles", user.uid), updatedData, { merge: true });
@@ -225,10 +327,16 @@ export default function ProfilePage() {
       <div className="relative h-48 bg-gradient-to-r from-brand-600 via-brand-700 to-indigo-800 overflow-hidden">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-white/10 via-transparent to-transparent" />
         <div className="absolute -bottom-16 left-1/2 -translate-x-1/2 md:left-8 md:translate-x-0">
-          <div className="relative w-32 h-32 rounded-full bg-surface-100 dark:bg-surface-800 border-4 border-background flex items-center justify-center shadow-xl">
-            <User size={64} className="text-surface-400 opacity-50" />
+          <div className="relative w-32 h-32 rounded-full bg-surface-100 dark:bg-surface-800 border-4 border-background shadow-xl">
+            <div className="w-full h-full rounded-full overflow-hidden flex items-center justify-center">
+              {profile.photoUrl ? (
+                <img src={profile.photoUrl} alt={profile.displayName} className="w-full h-full object-cover" />
+              ) : (
+                <User size={64} className="text-surface-400 opacity-50" />
+              )}
+            </div>
             {profile.verified && (
-              <span className="absolute bottom-0 right-0 p-1.5 bg-brand-500 text-white rounded-full border-2 border-background shadow-md">
+              <span className="absolute bottom-0 right-0 p-1.5 bg-brand-500 text-white rounded-full border-2 border-background shadow-md z-10">
                 <Sparkles size={16} />
               </span>
             )}
@@ -351,6 +459,21 @@ export default function ProfilePage() {
                   Account Management
                 </h3>
                 <div className="space-y-3">
+                  {/* Subscription Membership info */}
+                  <div className="flex items-center justify-between p-3 bg-surface-800/40 rounded-xl border border-border/40">
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold">Membership Plan</p>
+                      <p className="text-xs text-surface-500">
+                        Current Tier: <span className="capitalize font-bold text-brand-400">{(profile as any)?.subscriptionTier || "free"}</span>
+                      </p>
+                    </div>
+                    <Link
+                      href="/settings/subscription"
+                      className="px-4 py-2 text-xs font-bold rounded-lg transition-colors bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/30 flex items-center gap-1 shrink-0"
+                    >
+                      View Plans
+                    </Link>
+                  </div>
                   <div className="flex items-center justify-between p-3 bg-surface-800/40 rounded-xl border border-border/40">
                     <div className="space-y-1">
                       <p className="text-sm font-semibold">
@@ -413,6 +536,18 @@ export default function ProfilePage() {
                   <X size={16} />
                   Cancel
                 </button>
+              </div>
+
+              {/* Photo Upload */}
+              <div className="border-b border-border/40 pb-4">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-surface-400 mb-2">
+                  Profile Picture
+                </label>
+                <PhotoUpload
+                  currentPhotoUrl={editForm.photoUrl || null}
+                  onUploadComplete={(url) => setEditForm({ ...editForm, photoUrl: url })}
+                  onRemove={() => setEditForm({ ...editForm, photoUrl: "" })}
+                />
               </div>
 
               {/* Text Fields */}
@@ -490,7 +625,7 @@ export default function ProfilePage() {
                     Location & Community
                   </h4>
                   <div className="grid grid-cols-3 gap-3">
-                    <div className="col-span-2">
+                    <div className="col-span-2 relative">
                       <label className="block text-[11px] font-semibold text-surface-400 mb-1">
                         City
                       </label>
@@ -498,11 +633,25 @@ export default function ProfilePage() {
                         type="text"
                         required
                         value={editForm.city}
-                        onChange={(e) =>
-                          setEditForm({ ...editForm, city: e.target.value })
-                        }
+                        onChange={(e) => handleCityChange(e.target.value)}
+                        onFocus={() => { if (cityPredictions.length > 0) setShowPredictions(true); }}
+                        onBlur={() => setTimeout(() => setShowPredictions(false), 200)}
                         className="w-full p-2.5 rounded-lg bg-surface-900 border border-border focus:border-brand-500 focus:outline-none text-sm transition-colors"
                       />
+                      {showPredictions && cityPredictions.length > 0 && (
+                        <div className="absolute left-0 right-0 mt-1 bg-surface-900 border border-white/10 rounded-xl overflow-hidden shadow-2xl z-50 max-h-48 overflow-y-auto">
+                          {cityPredictions.map((pred, i) => (
+                            <button
+                              key={i}
+                              type="button"
+                              onClick={() => handleSelectCity(pred)}
+                              className="w-full p-2.5 text-left text-xs font-semibold text-surface-300 hover:bg-brand-500/10 hover:text-brand-400 border-b border-white/5 transition-colors"
+                            >
+                              {pred.description}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className="block text-[11px] font-semibold text-surface-400 mb-1">

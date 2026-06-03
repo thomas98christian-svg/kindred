@@ -35,6 +35,7 @@ export default function DiscoverPage() {
   const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [myProfile, setMyProfile] = useState<ProfileDoc | null>(null);
+  const [isPaywallOpen, setIsPaywallOpen] = useState(false);
 
   // Drag-to-swipe physics values
   const x = useMotionValue(0);
@@ -125,6 +126,20 @@ export default function DiscoverPage() {
   const handleAction = async (action: 'pass' | 'connect') => {
     if (!user || currentIndex >= candidates.length) return;
     const candidate = candidates[currentIndex];
+
+    // Check Swipe Limits for Free Tier
+    const tier = (myProfile as any)?.subscriptionTier || "free";
+    if (tier === "free") {
+      const today = new Date().toISOString().split("T")[0];
+      const count = parseInt(localStorage.getItem(`kindred_swipe_count_${today}`) || "0", 10);
+      if (count >= 5) {
+        setIsPaywallOpen(true);
+        // Reset card controls visually
+        cardControls.start({ x: 0, opacity: 1 });
+        x.set(0);
+        return;
+      }
+    }
     
     // Swipe animation exit
     if (action === 'connect') {
@@ -165,6 +180,13 @@ export default function DiscoverPage() {
       await cardControls.start({ x: -400, opacity: 0, transition: { duration: 0.2 } });
       // Pass is client-only skip in this version
       info(`Skipped ${candidate.profile.displayName}`);
+    }
+
+    // Increment swipe count for free tier
+    if (tier === "free") {
+      const today = new Date().toISOString().split("T")[0];
+      const count = parseInt(localStorage.getItem(`kindred_swipe_count_${today}`) || "0", 10);
+      localStorage.setItem(`kindred_swipe_count_${today}`, (count + 1).toString());
     }
 
     // Reset coordinates for next card and increment
@@ -267,10 +289,14 @@ export default function DiscoverPage() {
                 </motion.div>
 
                 {/* Profile Photo Mock */}
-                <div className="h-80 bg-gradient-to-br from-brand-900/30 to-indigo-900/40 relative">
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <User size={80} className="text-white/20" />
-                  </div>
+                <div className="h-80 relative bg-slate-950">
+                  {current.profile.photoUrl ? (
+                    <img src={current.profile.photoUrl} alt={current.profile.displayName} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-brand-900/30 to-indigo-900/40">
+                      <User size={80} className="text-white/20" />
+                    </div>
+                  )}
                   {/* Gradient Overlay for name */}
                   <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/20 to-transparent" />
                   
@@ -364,6 +390,52 @@ export default function DiscoverPage() {
             </div>
           );
         })()}
+      </AnimatePresence>
+
+      {/* Paywall Dialog */}
+      <AnimatePresence>
+        {isPaywallOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-55"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="glass max-w-sm w-full p-6 rounded-3xl border border-brand-500/30 text-center space-y-5 relative overflow-hidden"
+            >
+              <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-brand-500 to-indigo-500" />
+              <div className="w-16 h-16 mx-auto rounded-full bg-brand-500/10 flex items-center justify-center border border-brand-500/25 text-brand-400 animate-bounce mt-2">
+                <Sparkles size={32} />
+              </div>
+              
+              <div className="space-y-2">
+                <h3 className="text-xl font-black text-white">Swipe Limit Reached!</h3>
+                <p className="text-xs text-surface-400 leading-relaxed">
+                  You've used all 5 free swipes for today. Upgrade to <span className="text-brand-400 font-bold">Kindred Plus</span> for unlimited swiping, midpoint recommended cafe spots, and Claude AI helper suggestions.
+                </p>
+              </div>
+
+              <div className="space-y-2.5 pt-2">
+                <button
+                  onClick={() => router.push("/settings/subscription")}
+                  className="w-full py-3 bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white rounded-xl font-bold text-xs transition-colors shadow-lg shadow-brand-500/20"
+                >
+                  Unlock Kindred Plus
+                </button>
+                <button
+                  onClick={() => setIsPaywallOpen(false)}
+                  className="w-full py-3 bg-surface-850 hover:bg-surface-800 text-surface-400 rounded-xl font-bold text-xs transition-colors border border-white/5"
+                >
+                  Maybe Later
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
       </AnimatePresence>
     </div>
   );
