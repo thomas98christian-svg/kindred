@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { AuthProvider } from "@/components/providers/AuthProvider";
 import { ToastProvider } from "@/components/providers/ToastProvider";
 import { BottomNav } from "@/components/ui/BottomNav";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -36,6 +37,7 @@ export default function RootLayout({
           <ToastProvider>
             <main className="flex-1 pb-16">{children}</main>
             <BottomNav />
+            <SpeedInsights />
           </ToastProvider>
         </AuthProvider>
       </body>

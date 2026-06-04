@@ -15,7 +15,7 @@ import {
   serverTimestamp 
 } from "@/lib/firebase/firestore";
 import { ProfileDoc } from "@/types/database";
-import { passesPreFilters, calculateCompatScore } from "@/lib/matching/engine";
+import { passesPreFilters, calculateCompatScore, MatchCompatResult } from "@/lib/matching/engine";
 import { UserX, Heart, User, MapPin, Sparkles, Compass, HelpCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { motion, useMotionValue, useTransform, useAnimation, AnimatePresence } from "framer-motion";
@@ -24,6 +24,7 @@ interface Candidate {
   id: string;
   profile: ProfileDoc;
   score: number;
+  compat: MatchCompatResult;
 }
 
 export default function DiscoverPage() {
@@ -64,12 +65,7 @@ export default function DiscoverPage() {
         }
         setMyProfile(fetchedProfile);
 
-        // 2. Fetch my answers
-        const myAnswersSnap = await getDocs(collection(db, `profiles/${user!.uid}/profileAnswers`));
-        const myAnswers: Record<string, any> = {};
-        myAnswersSnap.forEach(d => myAnswers[d.id] = d.data().value);
-
-        // 3. Fetch matches/passes to exclude them
+        // 2. Fetch matches/passes to exclude them
         const matchesQ = query(collection(db, "matches"), where("participants", "array-contains", user!.uid));
         const matchesSnap = await getDocs(matchesQ);
         const interactedIds = new Set<string>();
@@ -78,7 +74,7 @@ export default function DiscoverPage() {
           interactedIds.add(m.profileA === user!.uid ? m.profileB : m.profileA);
         });
 
-        // 4. Fetch profiles in community
+        // 3. Fetch profiles in community
         const profilesQ = query(
           collection(db, "profiles"),
           where("communityId", "==", fetchedProfile.communityId),
@@ -95,16 +91,12 @@ export default function DiscoverPage() {
           const candidateProfile = docSnap.data() as ProfileDoc;
           
           if (passesPreFilters(fetchedProfile, candidateProfile)) {
-            // Fetch their answers
-            const theirAnswersSnap = await getDocs(collection(db, `profiles/${docSnap.id}/profileAnswers`));
-            const theirAnswers: Record<string, any> = {};
-            theirAnswersSnap.forEach(d => theirAnswers[d.id] = d.data().value);
-
-            const score = calculateCompatScore(myAnswers, theirAnswers);
+            const compat = calculateCompatScore(fetchedProfile, candidateProfile);
             validCandidates.push({
               id: docSnap.id,
               profile: candidateProfile,
-              score,
+              score: compat.score,
+              compat,
             });
           }
         }

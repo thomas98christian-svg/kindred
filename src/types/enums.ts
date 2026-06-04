@@ -18,6 +18,21 @@ export const Seriousness = {
 } as const;
 export type Seriousness = (typeof Seriousness)[keyof typeof Seriousness];
 
+export const KidsGoal = {
+  WANTS_KIDS: 'wants_kids',
+  HAS_KIDS: 'has_kids',
+  NO_KIDS: 'no_kids',
+  OPEN_KIDS: 'open_kids',
+} as const;
+export type KidsGoal = (typeof KidsGoal)[keyof typeof KidsGoal];
+
+export const AttachmentStyle = {
+  SECURE: 'secure',
+  ANXIOUS: 'anxious',
+  AVOIDANT: 'avoidant',
+} as const;
+export type AttachmentStyle = (typeof AttachmentStyle)[keyof typeof AttachmentStyle];
+
 export const ConnectionMode = {
   FRIENDSHIP: 'friendship',
   DATING: 'dating',

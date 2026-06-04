@@ -21,6 +21,20 @@ const timeWindowSchema = z.object({
 
 // --- Profile ---
 
+export const psychologySchema = z.object({
+  attachmentTendency: z.enum(['secure', 'anxious', 'avoidant']),
+  conflictRepair: z.string().min(1).max(500),
+  coreValues: z.array(z.string()).min(1).max(5),
+  feelCaredFor: z.string().min(1).max(200),
+  showCare: z.string().min(1).max(200),
+  closenessAutonomy: z.number().int().min(1).max(5),
+  relationshipPace: z.string().min(1).max(200),
+  communicationCadence: z.string().min(1).max(200),
+  stressResponse: z.string().min(1).max(200),
+  planningStyle: z.enum(['spontaneous', 'structured', 'balanced']),
+  dealbreakers: z.array(z.string()).max(10),
+});
+
 export const profileCreateSchema = z.object({
   displayName: z.string().min(1, 'Display name is required').max(50),
   age: z.number().int().min(18, 'Must be 18 or older').max(120),
@@ -29,7 +43,7 @@ export const profileCreateSchema = z.object({
   ageMinPref: z.number().int().min(18).max(120),
   ageMaxPref: z.number().int().min(18).max(120),
   segment: segmentSchema,
-  intentModes: z.array(connectionModeSchema).min(1, 'Select at least one mode').max(2),
+  intentModes: z.array(connectionModeSchema).min(1).max(2).optional().default(['dating']), // Default to dating-only
   seriousness: seriousnessSchema,
   matchWithinSegment: z.boolean(),
   city: z.string().min(1, 'City is required').max(100),
@@ -37,6 +51,11 @@ export const profileCreateSchema = z.object({
   metro: z.string().max(100).optional(),
   bio: z.string().max(500).optional().default(''),
   communityId: z.string().max(100).optional().nullable(),
+  photos: z.array(z.string()).min(3, 'At least 3 photos are required').max(6),
+  job: z.string().min(1, 'Occupation is required').max(100),
+  height: z.number().int().min(30).max(100).optional().nullable(),
+  kids: z.enum(['wants_kids', 'has_kids', 'no_kids', 'open_kids']),
+  psychology: psychologySchema,
   availability: z.record(
     z.string(), // day of week key
     z.array(timeWindowSchema),

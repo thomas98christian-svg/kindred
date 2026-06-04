@@ -21,6 +21,8 @@ import type {
   JoinRule,
   SubscriptionTier,
   SubscriptionStatus,
+  KidsGoal,
+  AttachmentStyle,
 } from './enums';
 
 // ------------------------------------------------------------
@@ -43,6 +45,20 @@ export interface AvailabilityWindow {
   end: string;   // "17:00"
 }
 
+export interface ProfilePsychology {
+  attachmentTendency: AttachmentStyle;
+  conflictRepair: string;
+  coreValues: string[];
+  feelCaredFor: string;
+  showCare: string;
+  closenessAutonomy: number;
+  relationshipPace: string;
+  communicationCadence: string;
+  stressResponse: string;
+  planningStyle: 'spontaneous' | 'structured' | 'balanced';
+  dealbreakers: string[];
+}
+
 export interface ProfileDoc {
   displayName: string;
   age: number;
@@ -60,7 +76,12 @@ export interface ProfileDoc {
   lat: number;
   lng: number;
   bio: string;
-  photoUrl: string | null;
+  photoUrl: string | null; // Keep for fallback compatibility
+  photos: string[];        // New multi-photo array
+  job: string;
+  height: number | null;   // optional height in inches
+  kids: KidsGoal;
+  psychology: ProfilePsychology;
   verified: boolean;
   status: ProfileStatus;
   communityId: string | null;
