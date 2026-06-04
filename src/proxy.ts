@@ -20,7 +20,7 @@ const PROTECTED_PATHS = [
 // Routes that should redirect to discover if already authenticated
 const AUTH_PATHS = ['/'];
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Check for session cookie (set after successful Firebase auth)
