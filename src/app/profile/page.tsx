@@ -9,19 +9,18 @@ import { getFirebaseDb, doc, readDoc, setDoc } from "@/lib/firebase/firestore";
 import { ProfileDoc } from "@/types/database";
 import { ConnectionMode } from "@/types/enums";
 import { motion, AnimatePresence } from "framer-motion";
-import { PhotoUpload } from "@/components/ui/PhotoUpload";
-import { 
-  User, 
-  LogOut, 
-  Edit2, 
-  Check, 
-  X, 
-  MapPin, 
-  ShieldAlert, 
-  Sparkles, 
-  UserMinus, 
+import { MultiPhotoUpload } from "@/components/ui/MultiPhotoUpload";
+import {
+  User,
+  LogOut,
+  Edit2,
+  Check,
+  X,
+  MapPin,
+  ShieldAlert,
+  Sparkles,
+  UserMinus,
   UserCheck,
-  ChevronRight,
   Heart,
   Users
 } from "lucide-react";
@@ -72,7 +71,7 @@ export default function ProfilePage() {
     city: "",
     state: "",
     metro: "",
-    photoUrl: "",
+    photos: [] as string[],
     lat: null as number | null,
     lng: null as number | null,
   });
@@ -147,7 +146,7 @@ export default function ProfilePage() {
           city: docData.city || "",
           state: docData.state || "",
           metro: docData.metro || "",
-          photoUrl: docData.photoUrl || "",
+          photos: docData.photos?.length > 0 ? docData.photos : (docData.photoUrl ? [docData.photoUrl] : []),
           lat: docData.lat || null,
           lng: docData.lng || null,
         });
@@ -279,7 +278,8 @@ export default function ProfilePage() {
         city: editForm.city,
         state: editForm.state,
         metro: editForm.metro,
-        photoUrl: editForm.photoUrl || null,
+        photos: editForm.photos,
+        photoUrl: editForm.photos[0] || null,
         lat: editForm.lat || null,
         lng: editForm.lng || null,
       };
@@ -329,8 +329,8 @@ export default function ProfilePage() {
         <div className="absolute -bottom-16 left-1/2 -translate-x-1/2 md:left-8 md:translate-x-0">
           <div className="relative w-32 h-32 rounded-full bg-surface-100 dark:bg-surface-800 border-4 border-background shadow-xl">
             <div className="w-full h-full rounded-full overflow-hidden flex items-center justify-center">
-              {profile.photoUrl ? (
-                <img src={profile.photoUrl} alt={profile.displayName} className="w-full h-full object-cover" />
+              {(profile.photos?.[0] || profile.photoUrl) ? (
+                <img src={profile.photos?.[0] || profile.photoUrl!} alt={profile.displayName} className="w-full h-full object-cover" />
               ) : (
                 <User size={64} className="text-surface-400 opacity-50" />
               )}
@@ -540,13 +540,9 @@ export default function ProfilePage() {
 
               {/* Photo Upload */}
               <div className="border-b border-border/40 pb-4">
-                <label className="block text-xs font-semibold uppercase tracking-wider text-surface-400 mb-2">
-                  Profile Picture
-                </label>
-                <PhotoUpload
-                  currentPhotoUrl={editForm.photoUrl || null}
-                  onUploadComplete={(url) => setEditForm({ ...editForm, photoUrl: url })}
-                  onRemove={() => setEditForm({ ...editForm, photoUrl: "" })}
+                <MultiPhotoUpload
+                  photos={editForm.photos}
+                  onChange={(photos) => setEditForm({ ...editForm, photos })}
                 />
               </div>
 
