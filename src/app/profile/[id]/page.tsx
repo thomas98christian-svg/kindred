@@ -1,19 +1,31 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/components/providers/AuthProvider";
-import { readDoc } from "@/lib/firebase/firestore";
-import { ProfileDoc } from "@/types/database";
+import { useToast } from "@/components/providers/ToastProvider";
+import {
+  readDoc,
+  getFirebaseDb,
+  collection,
+  query,
+  where,
+  getDocs,
+  doc,
+  setDoc,
+  serverTimestamp,
+} from "@/lib/firebase/firestore";
+import { ProfileDoc, LikeDoc } from "@/types/database";
 import { calculateCompatScore, passesPreFilters, MatchCompatResult } from "@/lib/matching/engine";
 import {
   ArrowLeft, Heart, MapPin, Briefcase, Baby, Calendar,
-  User, Sparkles, ChevronLeft, ChevronRight,
+  User, Sparkles, ChevronLeft, ChevronRight, MessageCircleHeart,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 export default function ProfileDetailPage() {
   const { user } = useAuth();
+  const { success, error } = useToast();
   const router = useRouter();
   const params = useParams() as { id: string };
   const profileId = params.id;
@@ -23,6 +35,9 @@ export default function ProfileDetailPage() {
   const [loading, setLoading] = useState(true);
   const [photoIdx, setPhotoIdx] = useState(0);
   const touchStartX = useRef<number | null>(null);
+  const [liked, setLiked] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [mutualMatch, setMutualMatch] = useState<{ name: string; score: number } | null>(null);
 
   useEffect(() => {
     if (!user || !profileId) return;
@@ -57,6 +72,69 @@ export default function ProfileDetailPage() {
     else if (dx > 40) prevPhoto();
     touchStartX.current = null;
   };
+
+  const handleLike = useCallback(async () => {
+    if (!user || !profile || liked || submitting) return;
+    setSubmitting(true);
+    try {
+      const db = getFirebaseDb();
+      const likeId = `${user.uid}_${profileId}_profile`;
+
+      await setDoc(doc(db, "likes", likeId), {
+        fromUid: user.uid,
+        toUid: profileId,
+        elementId: "profile",
+        note: "",
+        createdAt: serverTimestamp(),
+      } satisfies Omit<LikeDoc, "createdAt"> & { createdAt: unknown });
+
+      setLiked(true);
+      success("Liked!");
+
+      // Check for mutual match
+      const theirLikesQ = query(
+        collection(db, "likes"),
+        where("fromUid", "==", profileId),
+        where("toUid", "==", user.uid)
+      );
+      const theirLikesSnap = await getDocs(theirLikesQ);
+
+      if (!theirLikesSnap.empty) {
+        const participants = [user.uid, profileId].sort() as [string, string];
+        const matchId = `${participants[0]}_${participants[1]}`;
+
+        await setDoc(doc(db, "matches", matchId), {
+          profileA: participants[0],
+          profileB: participants[1],
+          participants,
+          compatScore: compat?.score ?? 0,
+          status: "connected",
+          createdAt: serverTimestamp(),
+        }, { merge: true });
+
+        await setDoc(doc(db, "connections", matchId), {
+          matchId,
+          mode: "dating",
+          agreedSeriousness: null,
+          profileA: participants[0],
+          profileB: participants[1],
+          participants,
+          openedAt: serverTimestamp(),
+          softDeadline: new Date(Date.now() + 48 * 60 * 60 * 1000),
+          firstMessageAt: null,
+          state: "open",
+          closedReason: null,
+        }, { merge: true });
+
+        setMutualMatch({ name: profile.displayName, score: compat?.score ?? 0 });
+      }
+    } catch (err) {
+      console.error("Like failed:", err);
+      error("Failed to save like.");
+    } finally {
+      setSubmitting(false);
+    }
+  }, [user, profile, profileId, liked, submitting, compat, success, error]);
 
   if (loading || !profile) {
     return (
@@ -282,13 +360,67 @@ export default function ProfileDetailPage() {
             Back
           </button>
           <button
-            onClick={() => router.back()}
-            className="flex-1 py-3.5 bg-gradient-to-r from-brand-600 to-indigo-600 text-white rounded-2xl font-bold text-sm shadow-lg shadow-brand-500/25 flex items-center justify-center gap-2 active:scale-95 transition-all"
+            onClick={handleLike}
+            disabled={liked || submitting}
+            className={`flex-1 py-3.5 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-70 ${
+              liked
+                ? "bg-rose-500/20 border border-rose-500/30 text-rose-400"
+                : "bg-gradient-to-r from-brand-600 to-indigo-600 text-white shadow-lg shadow-brand-500/25"
+            }`}
           >
-            <Heart size={16} fill="currentColor" /> Like Profile
+            <Heart size={16} fill="currentColor" />
+            {liked ? "Liked!" : submitting ? "Liking…" : "Like Profile"}
           </button>
         </div>
       </div>
+
+      {/* ── Mutual Match Celebration ────────────────────── */}
+      <AnimatePresence>
+        {mutualMatch && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/90 backdrop-blur-xl z-[60] flex items-center justify-center p-6"
+          >
+            <motion.div
+              initial={{ scale: 0.7, y: 40 }}
+              animate={{ scale: 1, y: 0 }}
+              transition={{ type: "spring", damping: 15 }}
+              className="max-w-sm w-full text-center space-y-6"
+            >
+              <motion.div
+                animate={{ rotate: [0, 10, -10, 0], scale: [1, 1.1, 1] }}
+                transition={{ duration: 0.8, repeat: 2 }}
+                className="w-24 h-24 mx-auto rounded-full bg-gradient-to-tr from-rose-500 to-brand-500 flex items-center justify-center shadow-2xl shadow-rose-500/40"
+              >
+                <MessageCircleHeart size={48} className="text-white" />
+              </motion.div>
+              <div>
+                <h2 className="text-3xl font-black text-white">It&apos;s a Match!</h2>
+                <p className="text-surface-400 text-sm mt-2">
+                  You and <span className="text-brand-400 font-bold">{mutualMatch.name}</span> liked each other.
+                  <br />Compatibility: <span className="text-white font-bold">{mutualMatch.score}%</span>
+                </p>
+              </div>
+              <div className="space-y-3">
+                <button
+                  onClick={() => { setMutualMatch(null); router.push("/matches"); }}
+                  className="w-full py-3.5 bg-gradient-to-r from-brand-600 to-indigo-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-brand-500/20"
+                >
+                  Send a Message
+                </button>
+                <button
+                  onClick={() => setMutualMatch(null)}
+                  className="w-full py-3 bg-surface-800 text-surface-400 rounded-xl font-semibold text-xs border border-white/5"
+                >
+                  Keep Exploring
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
