@@ -191,6 +191,12 @@ export default function ChatPage() {
             ...(d.data() as MessageDoc)
           }));
           setMessages(msgs);
+
+          // Auto-show AI Buddy when no messages exist (first open)
+          if (msgs.length === 0 && suggestions.length === 0 && !loadingSuggestions) {
+            setShowAiBuddy(true);
+            fetchSuggestions();
+          }
           
           // Auto scroll to bottom
           setTimeout(() => {
@@ -391,8 +397,8 @@ export default function ChatPage() {
             <ArrowLeft size={18} className="text-surface-300" />
           </Link>
           <div className="w-9 h-9 rounded-full bg-slate-900 border border-white/10 flex items-center justify-center shrink-0 overflow-hidden">
-            {otherProfile.photoUrl ? (
-              <img src={otherProfile.photoUrl} alt={otherProfile.displayName} className="w-full h-full object-cover" />
+            {(otherProfile.photos?.[0] || otherProfile.photoUrl) ? (
+              <img src={otherProfile.photos?.[0] || otherProfile.photoUrl!} alt={otherProfile.displayName} className="w-full h-full object-cover" />
             ) : (
               <User size={16} className="text-white/40" />
             )}

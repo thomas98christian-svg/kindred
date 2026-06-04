@@ -534,6 +534,21 @@ service cloud.firestore {
       allow write: if false; // Server only via Admin SDK
     }
 
+    // ----- likes (per-element likes with notes) -----
+    match /likes/{likeId} {
+      allow read: if isAuthenticated() &&
+        (resource.data.fromUid == request.auth.uid ||
+         resource.data.toUid == request.auth.uid);
+
+      allow create: if isAuthenticated() &&
+        request.resource.data.fromUid == request.auth.uid &&
+        request.resource.data.toUid is string &&
+        request.resource.data.elementId is string &&
+        request.resource.data.note is string;
+
+      allow update, delete: if false;
+    }
+
     // ----- Catch-all: deny everything else -----
     match /{document=**} {
       allow read, write: if false;

@@ -247,6 +247,18 @@ export interface SubscriptionDoc {
 }
 
 // ------------------------------------------------------------
+// likes  (doc ID = "{fromUid}_{toUid}_{elementId}")
+// Per-element likes with optional notes. Used for mutual matching.
+// ------------------------------------------------------------
+export interface LikeDoc {
+  fromUid: string;
+  toUid: string;
+  elementId: string; // 'photo_0' | 'bio' | 'values' | 'kids' | 'planning' | 'seriousness'
+  note: string;
+  createdAt: Timestamp;
+}
+
+// ------------------------------------------------------------
 // Collection path constants
 // ------------------------------------------------------------
 export const Collections = {
@@ -265,4 +277,6 @@ export const Collections = {
   RELIABILITY: 'reliability',
   WAITLIST: 'waitlist',
   SUBSCRIPTIONS: 'subscriptions',
+  LIKES: 'likes',
 } as const;
+

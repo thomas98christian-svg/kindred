@@ -48,6 +48,29 @@ export async function GET(request: Request) {
 
     const messages = messagesSnap.docs.map(doc => doc.data()).reverse();
 
+    // 4. Fetch mutual likes between participants for personalized openers
+    const likesFromA = await db.collection("likes")
+      .where("fromUid", "==", connData.profileA)
+      .where("toUid", "==", connData.profileB)
+      .get();
+    const likesFromB = await db.collection("likes")
+      .where("fromUid", "==", connData.profileB)
+      .where("toUid", "==", connData.profileA)
+      .get();
+    const allLikes: { from: string; elementId: string; note: string }[] = [
+      ...likesFromA.docs.map(d => {
+        const data = d.data() as { elementId: string; note: string };
+        return { from: "A", elementId: data.elementId, note: data.note };
+      }),
+      ...likesFromB.docs.map(d => {
+        const data = d.data() as { elementId: string; note: string };
+        return { from: "B", elementId: data.elementId, note: data.note };
+      }),
+    ];
+    const likeSummary = allLikes.map(l => 
+      `User ${l.from} liked "${l.elementId}"${l.note ? ` with note: "${l.note}"` : ""}`
+    ).join("; ");
+
     const anthropicInstance = getAnthropic();
 
     if (!anthropicInstance) {
@@ -60,8 +83,20 @@ export async function GET(request: Request) {
       const name = profileB.displayName;
 
       if (!hasMessages) {
-        suggestions.push(`Hey ${name}! I noticed in your bio that you love exploring. What's your favorite local spot?`);
-        suggestions.push(`Hi ${name}! Super excited to connect. What are you looking forward to this week?`);
+        // Reference liked elements in fallback starters
+        const likedElements = allLikes.filter(l => l.from === "A").map(l => l.elementId);
+        if (likedElements.includes("bio")) {
+          suggestions.push(`Hey ${name}! I really resonated with your bio. What inspired you to write that?`);
+        } else if (likedElements.includes("values")) {
+          suggestions.push(`Hey ${name}! I love that we share similar values. Which ones matter most to you?`);
+        } else {
+          suggestions.push(`Hey ${name}! I noticed in your bio that you love exploring. What's your favorite local spot?`);
+        }
+        if (likedElements.includes("photo_0") || likedElements.some(e => e.startsWith("photo"))) {
+          suggestions.push(`Hi ${name}! Love your photos! Where was that taken?`);
+        } else {
+          suggestions.push(`Hi ${name}! Super excited to connect. What are you looking forward to this week?`);
+        }
         suggestions.push(`Hey ${name}! Since we matched for ${connData.mode}, what's your go-to weekend activity?`);
       } else {
         const lastMsg = messages[messages.length - 1];
@@ -92,6 +127,7 @@ Each suggestion must be less than 120 characters, highly conversational, friendl
 The users are matching for: ${connData.mode} (${connData.agreedSeriousness || 'casual'}).
 User A Bio: ${profileA.displayName}, ${profileA.age}yo. Bio: "${profileA.bio || 'None'}"
 User B Bio: ${profileB.displayName}, ${profileB.age}yo. Bio: "${profileB.bio || 'None'}"
+${likeSummary ? `\nLike signals between them: ${likeSummary}\nIMPORTANT: Reference specific liked elements and notes in your suggestions to make them feel personal and unique.` : ''}
 
 Output MUST be a valid JSON array of exactly 3 strings. Example: ["Hello!", "How is it going?", "What's your favorite spot?"]`;
 
